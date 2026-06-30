@@ -1,0 +1,61 @@
+reid_dim: 2048
+latent_dim: 512
+history_len: 5
+
+projection:
+  hidden_dim: 1024
+
+predictor:
+  num_diffusion_steps: 1
+  time_dim: 64
+  denoiser_hidden_dim: 1024
+
+update_block:
+  hidden_dim: 1024
+  use_gru_cell_for_identity: true
+
+training:
+  batch_size: 16
+  stage1_epochs: 2
+  stage2_epochs: 1
+  lr_stage1: 0.0001
+  lr_stage2: 0.0001
+  weight_decay: 0.0001
+  stage1_mu_weight: 0.5
+  stage1_diff_weight: 0.2
+  stage1_metric_weight: 0.5
+  stage1_improve_weight: 10.0
+  stage1_improve_margin: 0.0
+  stage1_margin: 0.2
+  stage1_projection_warmup_epochs: 1
+  stage1_supcon_weight: 1.0
+  stage1_distill_weight: 1.0
+  stage1_supcon_temperature: 0.1
+  freeze_projection_after_warmup: true
+  match_temperature: 0.1
+  match_margin: 0.05
+
+obs_synthesis:
+  clean_prob: 0.5
+  dirty_lambda_min: 0.3
+  dirty_lambda_max: 0.8
+
+split_mode: sequence
+target_min_gap: 1
+target_max_gap: 1
+num_workers: 0
+split_seed: 42
+seed: 42
+grad_clip: 1.0
+device: cuda
+checkpoint_dir: checkpoints/sportsmot_smoke
+log_dir: logs
+feature_dir: datasets/sportsmot_train_gt_fastreid
+val_feature_dir: datasets/sportsmot_val_gt_fastreid
+sequences:
+  - v_-6Os86HzwCs_c007
+val_sequences:
+  - v_00HRwkvvjtQ_c001
+normalize_input: true
+identity_loss_weight: 0.5
+match_loss_weight: 1.0

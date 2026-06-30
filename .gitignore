@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+checkpoints/
+logs/
+/datasets/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+tracktrack_outputs/
