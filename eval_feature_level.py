@@ -70,11 +70,9 @@ def main():
     model = APUDiff(
         reid_dim=config.reid_dim,
         latent_dim=config.latent_dim,
-        projection_hidden_dim=config.projection_hidden_dim,
         time_dim=config.time_dim,
         num_diffusion_steps=config.num_diffusion_steps,
         denoiser_hidden_dim=config.denoiser_hidden_dim,
-        update_hidden_dim=config.update_hidden_dim,
     ).to(device)
     load_model_state(model, args.checkpoint, strict=False)
     model.eval()
@@ -102,8 +100,7 @@ def main():
         local_queue = model.project(history)
         target_z = model.project(target)
         other_z = model.project(other)
-        identity_token = model.init_identity(local_queue, history_mask)
-        pred_feat = model.predict(local_queue, history_mask, identity_token, deterministic=True)
+        pred_feat = model.predict(local_queue, history_mask, deterministic=True)
 
         last_z = last_real_feature(local_queue, history_mask)
         ema_feat = compute_ema(local_queue, history_mask, alpha=config.ema_alpha)

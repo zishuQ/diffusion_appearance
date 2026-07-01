@@ -18,6 +18,6 @@ loss_pred < loss_ema
 rank_acc_pred > rank_acc_ema
 ```
 
-`ProjectionHead`, `UpdateBlock`, and `CrossAttentionGate` remain in the codebase for compatibility, but they are disabled in the main Stage 1 training and `eval_feature_level.py` path. Stage 2 and TrackTrack integration are intentionally not part of this refactor.
+The codebase is intentionally predictor-only in this exploration branch. `ProjectionHead`, `UpdateBlock`, `CrossAttentionGate`, Stage 2 training, and match-level gate evaluation have been removed instead of preserved as compatibility paths.
 
 All training, validation, export, evaluation, and tracker experiments must be run serially. Do not start parallel jobs or background experiments on this machine.

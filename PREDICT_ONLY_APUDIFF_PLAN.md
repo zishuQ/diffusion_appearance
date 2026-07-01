@@ -11,9 +11,8 @@ matched raw ReID history [K, 2048]
 -> pred_feat for current-frame association cost
 ```
 
-The immediate objective is to remove the Stage2 UpdateBlock/Gate path from the
-main tracker experiment so metric changes can be attributed to the predictor
-itself.
+The Stage 2 update/gate path is removed from the main codebase so metric
+changes can be attributed to the predictor itself.
 
 ## Current Preference
 
@@ -27,8 +26,8 @@ current raw 2048-d direct-delta baseline.
 
 ## Main Design
 
-Use APUDiff only for prediction and association. Do not use learned Stage2
-updates during the main experiment.
+Use APUDiff only for prediction and association. Learned Stage 2 updates are
+not part of this branch.
 
 At frame `t`:
 
@@ -85,16 +84,8 @@ loss_diff
 loss_improve_vs_ema
 ```
 
-Do not train:
-
-```text
-UpdateBlock
-CrossAttentionGate
-gate teacher loss
-candidate ranking loss from synthetic observations
-Stage2 dirty observation update
-Projection warmup
-```
+Do not train gate/update/projection-warmup components in this branch. Those
+modules and scripts have been deleted.
 
 ## Tracker Integration
 
@@ -122,16 +113,8 @@ predicted:
     ablation only, not the main result
 ```
 
-Remove or bypass calls to:
-
-```text
-model.update()
-model.match_gate_value()
-UpdateBlock
-CrossAttentionGate
-```
-
-for the main APUDiff tracker path.
+There are no `model.update()` or `model.match_gate_value()` calls in the
+predictor-only tracker path.
 
 Keep TrackTrack baseline parameters and matching weights unchanged. Only the
 APUDiff-specific feature source/update behavior should change.

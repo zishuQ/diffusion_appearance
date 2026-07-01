@@ -2,13 +2,13 @@
 
 ## Project Structure & Module Organization
 
-This repository implements APUDiff, a feature-level appearance model for MOT tracking. Core package code lives under `apu_diff/`:
+This repository implements APUDiff, a feature-level appearance model for MOT tracking. The current exploration branch is a raw 2048-d direct-delta diffusion predictor. Core package code lives under `apu_diff/`:
 
-- `apu_diff/models/`: projection head, diffusion predictor, update block, and APUDiff wrapper.
+- `apu_diff/models/`: diffusion predictor and APUDiff wrapper.
 - `apu_diff/datasets/`: feature tracklet dataset and dataloader construction.
 - `apu_diff/utils/`: feature I/O, losses, metrics, diffusion helpers, and training utilities.
 - `configs/`: dataset and experiment YAML files such as `apu_diff_default.yaml`, `apu_diff_mot20.yaml`, and SportsMOT variants.
-- Top-level scripts handle workflows: `export_gt_features.py`, `train_stage1_predictor.py`, `train_stage2_update.py`, `eval_feature_level.py`, and `eval_match_level.py`.
+- Top-level scripts handle workflows: `export_gt_features.py`, `train_stage1_predictor.py`, and `eval_feature_level.py`.
 
 Large generated assets are expected under `datasets/`, `checkpoints/`, `logs/`, and `tracktrack_outputs/`; do not commit bulky generated files unless explicitly required.
 
@@ -17,32 +17,30 @@ Large generated assets are expected under `datasets/`, `checkpoints/`, `logs/`, 
 Use the existing virtual environment. If packages must be installed, use `uv pip`, not plain `pip`.
 
 ```bash
-.venv/bin/python -m compileall -q apu_diff train_stage1_predictor.py train_stage2_update.py
+.venv/bin/python -m compileall -q apu_diff train_stage1_predictor.py eval_feature_level.py eval_stage1_by_sequence.py
 ```
 
 Runs a fast syntax/import sanity check.
 
 ```bash
 .venv/bin/python train_stage1_predictor.py --config configs/apu_diff_mot20.yaml --batch-size 32 --num-workers 0
-.venv/bin/python train_stage2_update.py --config configs/apu_diff_mot20.yaml --stage1-checkpoint checkpoints/mot20/stage1_predictor_best_improve.pth
 ```
 
-Runs Stage 1 predictor training, then Stage 2 update/gate training. Keep long jobs serial to avoid exhausting GPU/system resources.
+Runs Stage 1 predictor training. Keep long jobs serial to avoid exhausting GPU/system resources.
 
 ```bash
 .venv/bin/python eval_feature_level.py --config configs/apu_diff_mot20.yaml --checkpoint checkpoints/mot20/apu_diff_full.pth
-.venv/bin/python eval_match_level.py --config configs/apu_diff_mot20.yaml --checkpoint checkpoints/mot20/apu_diff_full.pth
 ```
 
-Runs feature-level and candidate-ranking evaluation.
+Runs feature-level evaluation.
 
 ## Coding Style & Naming Conventions
 
-Python code uses 4-space indentation, type hints where useful, and concise module-level organization. Prefer clear tensor names already used in the project: `history_feats`, `history_mask`, `local_queue`, `identity_token`, `target_z`, `obs_z`, and `pred_feat`. Keep APIs compatible with batched tensors and avoid hard-coding feature dimensions; ReID features are commonly 2048-D, latent features commonly 512-D.
+Python code uses 4-space indentation, type hints where useful, and concise module-level organization. Prefer clear tensor names already used in the project: `history_feats`, `history_mask`, `local_queue`, `target_z`, and `pred_feat`. Keep APIs compatible with batched tensors and avoid hard-coding feature dimensions; the current predictor uses 2048-D normalized raw ReID features.
 
 ## Testing Guidelines
 
-There is no formal test suite yet. Before submitting changes, run `compileall` and a small shape smoke test for APUDiff with `B=2`, `K=5`, `reid_dim=2048`, and `latent_dim=2048`. Verify prediction and appearance-cost outputs are L2-normalized and have expected shapes. Update and gate components are currently compatibility code, not the main Stage 1 path.
+There is no formal test suite yet. Before submitting changes, run `compileall` and a small shape smoke test for APUDiff with `B=2`, `K=5`, `reid_dim=2048`, and `latent_dim=2048`. Verify prediction and appearance-cost outputs have expected shapes and prediction features are L2-normalized.
 
 ## Commit & Pull Request Guidelines
 
@@ -52,4 +50,4 @@ Pull requests should describe the experiment or code path changed, list commands
 
 ## Agent-Specific Instructions
 
-Do not introduce EMA or original ReID feature blending into APUDiff evaluation unless explicitly requested. Keep TrackTrack baseline parameters unchanged when testing APUDiff; only APUDiff-specific components should vary.
+Do not introduce EMA or original ReID feature blending into APUDiff evaluation unless explicitly requested. Keep TrackTrack baseline parameters unchanged when testing APUDiff; only APUDiff-specific components should vary. Stage 2 update/gate code has been removed from this branch; rebuild it deliberately if that direction is resumed.

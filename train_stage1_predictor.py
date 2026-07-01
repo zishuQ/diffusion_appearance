@@ -84,8 +84,6 @@ def _rank_accuracy(anchor: torch.Tensor, target_z: torch.Tensor, other_z: torch.
 
 def run_epoch(model, loader, optimizer, device, config, train: bool, show_progress: bool = True):
     model.train(train)
-    if not any(param.requires_grad for param in model.projection.parameters()):
-        model.projection.eval()
 
     totals = {
         "loss": 0.0,
@@ -222,15 +220,10 @@ def main():
     model = APUDiff(
         reid_dim=config.reid_dim,
         latent_dim=config.latent_dim,
-        projection_hidden_dim=config.projection_hidden_dim,
         time_dim=config.time_dim,
         num_diffusion_steps=config.num_diffusion_steps,
         denoiser_hidden_dim=config.denoiser_hidden_dim,
-        update_hidden_dim=config.update_hidden_dim,
     ).to(device)
-    for module in (model.projection, model.update_block, model.cross_attn_gate):
-        for param in module.parameters():
-            param.requires_grad = False
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

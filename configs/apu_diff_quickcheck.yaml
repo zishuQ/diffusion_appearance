@@ -2,42 +2,19 @@ reid_dim: 2048
 latent_dim: 2048
 history_len: 5
 
-projection:
-  hidden_dim: 1024
-
 predictor:
   num_diffusion_steps: 1
   time_dim: 64
   denoiser_hidden_dim: 1024
 
-update_block:
-  hidden_dim: 1024
-  use_gru_cell_for_identity: true
-
 training:
   batch_size: 64
   stage1_epochs: 2
-  stage2_epochs: 1
   lr_stage1: 0.0001
-  lr_stage2: 0.0001
   weight_decay: 0.0001
-  stage1_mu_weight: 0.5
   stage1_diff_weight: 0.2
-  stage1_metric_weight: 0.5
   stage1_improve_weight: 2.0
-  stage1_improve_margin: 0.0
-  stage1_margin: 0.2
-  stage1_projection_warmup_epochs: 0
-  stage1_supcon_weight: 1.0
-  stage1_distill_weight: 1.0
-  stage1_supcon_temperature: 0.1
-  freeze_projection_after_warmup: false
   ema_alpha: 0.9
-
-obs_synthesis:
-  clean_prob: 0.5
-  dirty_lambda_min: 0.3
-  dirty_lambda_max: 0.8
 
 num_workers: 0
 val_fraction: 0.1
@@ -64,5 +41,3 @@ sequences:
   - MOT17-11-FRCNN
   - MOT17-13-FRCNN
 normalize_input: true
-identity_loss_weight: 0.5
-match_loss_weight: 0.2

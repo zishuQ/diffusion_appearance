@@ -61,12 +61,9 @@ def build_model(config, device):
     model = APUDiff(
         reid_dim=config.reid_dim,
         latent_dim=config.latent_dim,
-        projection_hidden_dim=config.projection_hidden_dim,
         time_dim=config.time_dim,
         num_diffusion_steps=config.num_diffusion_steps,
         denoiser_hidden_dim=config.denoiser_hidden_dim,
-        update_hidden_dim=config.update_hidden_dim,
-        predictor_anchor_delta_scale=config.predictor_anchor_delta_scale,
     ).to(device)
     return model
 
