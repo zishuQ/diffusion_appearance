@@ -34,6 +34,8 @@ def parse_args():
     parser.add_argument("--ema-alpha", type=float, default=None)
     parser.add_argument("--log-name", default="stage1_predictor")
     parser.add_argument("--no-progress", action="store_true")
+    parser.add_argument("--max-train-batches", type=int, default=0, help="Debug only: stop each train epoch after N batches.")
+    parser.add_argument("--max-val-batches", type=int, default=0, help="Debug only: stop each val epoch after N batches.")
     return parser.parse_args()
 
 
@@ -82,7 +84,7 @@ def _rank_accuracy(anchor: torch.Tensor, target_z: torch.Tensor, other_z: torch.
     return (pos_cost < neg_cost).float().mean()
 
 
-def run_epoch(model, loader, optimizer, device, config, train: bool, show_progress: bool = True):
+def run_epoch(model, loader, optimizer, device, config, train: bool, show_progress: bool = True, max_batches: int = 0):
     model.train(train)
 
     totals = {
@@ -184,6 +186,8 @@ def run_epoch(model, loader, optimizer, device, config, train: bool, show_progre
             print(f"cuda peak MB: {peak_mb:.1f}")
 
         pbar.set_postfix(loss=f"{loss.item():.4f}", cos=f"{totals['cos_pred'] / num_batches:.4f}")
+        if max_batches and num_batches >= max_batches:
+            break
 
     denom = max(num_batches, 1)
     metrics = {key: value / denom for key, value in totals.items()}
@@ -259,6 +263,7 @@ def main():
             config,
             train=True,
             show_progress=not args.no_progress,
+            max_batches=args.max_train_batches,
         )
         val_metrics = run_epoch(
             model,
@@ -268,6 +273,7 @@ def main():
             config,
             train=False,
             show_progress=not args.no_progress,
+            max_batches=args.max_val_batches,
         )
         logging.info("train %s", train_metrics)
         logging.info("val %s", val_metrics)
