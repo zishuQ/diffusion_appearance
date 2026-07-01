@@ -90,19 +90,59 @@ class APUDiffConfig:
 def load_config(path: Optional[str] = None, overrides: Optional[Dict[str, Any]] = None) -> APUDiffConfig:
     data: Dict[str, Any] = {}
     if path:
-        with Path(path).open("r", encoding="utf-8") as f:
-            loaded = yaml.safe_load(f) or {}
-        if not isinstance(loaded, dict):
-            raise ValueError(f"Config file must contain a mapping: {path}")
-        data.update(loaded)
+        data.update(_load_yaml_with_bases(Path(path)))
     data = _flatten_config(data)
     if overrides:
         data.update({k: v for k, v in overrides.items() if v is not None})
     return APUDiffConfig.from_dict(data)
 
 
+def _load_yaml_with_bases(path: Path, seen: Optional[set[Path]] = None) -> Dict[str, Any]:
+    path = path.expanduser().resolve()
+    seen = set() if seen is None else set(seen)
+    if path in seen:
+        chain = " -> ".join(str(p) for p in [*seen, path])
+        raise ValueError(f"Recursive config base reference detected: {chain}")
+    seen.add(path)
+
+    with path.open("r", encoding="utf-8") as f:
+        loaded = yaml.safe_load(f) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Config file must contain a mapping: {path}")
+
+    base_refs = loaded.pop("base", None)
+    if base_refs is None:
+        base_refs = loaded.pop("bases", None)
+    if base_refs is None:
+        return loaded
+    if isinstance(base_refs, (str, Path)):
+        base_refs = [base_refs]
+    if not isinstance(base_refs, list):
+        raise ValueError(f"Config base must be a string or list in {path}")
+
+    merged: Dict[str, Any] = {}
+    for base_ref in base_refs:
+        base_path = Path(base_ref)
+        if not base_path.is_absolute():
+            base_path = path.parent / base_path
+        merged = _deep_update(merged, _load_yaml_with_bases(base_path, seen))
+    return _deep_update(merged, loaded)
+
+
+def _deep_update(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_update(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def _flatten_config(data: Dict[str, Any]) -> Dict[str, Any]:
     data = dict(data)
+    data.pop("base", None)
+    data.pop("bases", None)
     predictor = data.pop("predictor", {}) or {}
     training = data.pop("training", {}) or {}
     data.pop("projection", None)

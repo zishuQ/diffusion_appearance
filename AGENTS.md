@@ -7,7 +7,7 @@ This repository implements APUDiff, a feature-level appearance model for MOT tra
 - `apu_diff/models/`: diffusion predictor and APUDiff wrapper.
 - `apu_diff/datasets/`: feature tracklet dataset and dataloader construction.
 - `apu_diff/utils/`: feature I/O, losses, metrics, diffusion helpers, and training utilities.
-- `configs/`: dataset and experiment YAML files such as `apu_diff_default.yaml`, `apu_diff_mot20.yaml`, and SportsMOT variants.
+- `configs/`: shared defaults in `apu_diff_base.yaml` plus dataset and experiment YAML files that inherit with `base:`.
 - Top-level scripts handle workflows: `export_gt_features.py`, `train_stage1_predictor.py`, and `eval_feature_level.py`.
 
 Large generated assets are expected under `datasets/`, `checkpoints/`, `logs/`, and `tracktrack_outputs/`; do not commit bulky generated files unless explicitly required.

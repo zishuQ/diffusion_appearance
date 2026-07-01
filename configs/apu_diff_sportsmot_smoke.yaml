@@ -1,35 +1,14 @@
-reid_dim: 2048
-latent_dim: 2048
-history_len: 5
-
-predictor:
-  num_diffusion_steps: 1
-  time_dim: 64
-  denoiser_hidden_dim: 1024
+base: apu_diff_base.yaml
 
 training:
   batch_size: 16
   stage1_epochs: 2
-  lr_stage1: 0.0001
-  weight_decay: 0.0001
-  stage1_diff_weight: 0.2
   stage1_improve_weight: 10.0
-  ema_alpha: 0.9
 
-split_mode: sequence
-target_min_gap: 1
-target_max_gap: 1
-num_workers: 0
-split_seed: 42
-seed: 42
-grad_clip: 1.0
-device: cuda
 checkpoint_dir: checkpoints/sportsmot_smoke
-log_dir: logs
 feature_dir: datasets/sportsmot_train_gt_fastreid
 val_feature_dir: datasets/sportsmot_val_gt_fastreid
 sequences:
   - v_-6Os86HzwCs_c007
 val_sequences:
   - v_00HRwkvvjtQ_c001
-normalize_input: true

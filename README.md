@@ -20,4 +20,6 @@ rank_acc_pred > rank_acc_ema
 
 The codebase is intentionally predictor-only in this exploration branch. `ProjectionHead`, `UpdateBlock`, `CrossAttentionGate`, Stage 2 training, and match-level gate evaluation have been removed instead of preserved as compatibility paths.
 
+Dataset configs inherit shared defaults through `base:`. Common raw-delta predictor and training defaults live in `configs/apu_diff_base.yaml`; dataset configs only override paths, sequence splits, and experiment-specific values.
+
 All training, validation, export, evaluation, and tracker experiments must be run serially. Do not start parallel jobs or background experiments on this machine.
