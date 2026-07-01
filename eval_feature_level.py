@@ -94,13 +94,16 @@ def main():
     for batch in tqdm(loader, desc=f"eval_{args.split}"):
         history = batch["history_feats"].to(device, non_blocking=True)
         history_mask = batch["history_mask"].to(device, non_blocking=True)
+        identity = batch["identity_feats"].to(device, non_blocking=True)
+        identity_mask = batch["identity_mask"].to(device, non_blocking=True)
         target = batch["target_feat"].to(device, non_blocking=True)
         other = batch["other_feat"].to(device, non_blocking=True)
 
         local_queue = model.project(history)
+        identity_state = model.build_identity(identity, identity_mask)
         target_z = model.project(target)
         other_z = model.project(other)
-        pred_feat = model.predict(local_queue, history_mask, deterministic=True)
+        pred_feat = model.predict(local_queue, history_mask, identity_state=identity_state, deterministic=True)
 
         last_z = last_real_feature(local_queue, history_mask)
         ema_feat = compute_ema(local_queue, history_mask, alpha=config.ema_alpha)

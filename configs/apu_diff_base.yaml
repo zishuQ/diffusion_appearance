@@ -1,6 +1,7 @@
 reid_dim: 2048
 latent_dim: 2048
 history_len: 5
+identity_history_len: 32
 
 predictor:
   num_diffusion_steps: 1

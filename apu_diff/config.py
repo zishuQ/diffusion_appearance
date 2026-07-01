@@ -10,6 +10,7 @@ class APUDiffConfig:
     reid_dim: Union[int, str] = 2048
     latent_dim: int = 2048
     history_len: int = 5
+    identity_history_len: int = 32
     denoiser_hidden_dim: int = 512
     batch_size: int = 64
     num_workers: int = 0

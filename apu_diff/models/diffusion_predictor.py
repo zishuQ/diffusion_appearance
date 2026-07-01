@@ -20,24 +20,29 @@ class MFL(nn.Module):
         return self.linear(x) * gate + bias
 
 
-class HistoryTokenEmbedding(nn.Module):
-    """Project history tokens to context space with position embeddings.
+class ConditionTokenEmbedding(nn.Module):
+    """Project local history and optional identity state to DDM context tokens.
 
-    Outputs context_tokens [B, K, D] and context_mask [B, K] for
-    cross-attention inside the denoising network.  No TransformerEncoder
-    pooling is applied here -- the denoiser attends to raw tokens.
+    Local history tokens keep relative position embeddings.  The identity
+    state is a learned per-track memory vector and is added as one typed token,
+    not as a pile of stored historical frames.
     """
 
     def __init__(self, latent_dim: int, context_dim: int):
         super().__init__()
         self.history_proj = nn.Linear(latent_dim, context_dim)
+        self.identity_proj = nn.Linear(latent_dim, context_dim)
         self.history_type = nn.Parameter(torch.zeros(1, 1, context_dim))
+        self.identity_type = nn.Parameter(torch.zeros(1, 1, context_dim))
         nn.init.trunc_normal_(self.history_type, std=0.02)
+        nn.init.trunc_normal_(self.identity_type, std=0.02)
 
     def forward(
         self,
         history_z: torch.Tensor,
         history_mask: torch.Tensor | None = None,
+        identity_state: torch.Tensor | None = None,
+        identity_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size, history_len, _ = history_z.shape
         hist = self.history_proj(history_z) + self.history_type
@@ -52,7 +57,91 @@ class HistoryTokenEmbedding(nn.Module):
             ctx_mask = history_mask.to(device=history_z.device, dtype=tokens.dtype)
         else:
             ctx_mask = torch.ones(batch_size, history_len, device=history_z.device, dtype=tokens.dtype)
-        return tokens, ctx_mask
+        if identity_state is None:
+            return tokens, ctx_mask
+        if identity_state.dim() == 3:
+            if identity_state.shape[1] != 1:
+                raise ValueError(f"identity_state must be [B,D] or [B,1,D], got {tuple(identity_state.shape)}")
+            identity_state = identity_state[:, 0]
+        id_tokens = self.identity_proj(identity_state).unsqueeze(1) + self.identity_type
+        if identity_mask is None:
+            id_mask = torch.ones(batch_size, 1, device=history_z.device, dtype=tokens.dtype)
+        else:
+            id_mask = identity_mask.view(batch_size, 1).to(device=history_z.device, dtype=tokens.dtype)
+        return torch.cat([tokens, id_tokens], dim=1), torch.cat([ctx_mask, id_mask], dim=1)
+
+
+class IdentityMemory(nn.Module):
+    """Learned online identity state, maintained per track by the caller."""
+
+    def __init__(self, latent_dim: int, hidden_dim: int | None = None):
+        super().__init__()
+        hidden_dim = int(hidden_dim or max(latent_dim // 2, 256))
+        self.init_net = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, latent_dim),
+        )
+        self.update_net = nn.Sequential(
+            nn.Linear(latent_dim * 4 + 1, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, latent_dim),
+        )
+        self.update_gate = nn.Sequential(
+            nn.Linear(latent_dim * 4 + 1, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, latent_dim),
+        )
+
+    def init_identity(self, first_feat: torch.Tensor) -> torch.Tensor:
+        return F.normalize(first_feat + self.init_net(first_feat), dim=-1)
+
+    def update_identity(
+        self,
+        identity_state: torch.Tensor,
+        obs_feat: torch.Tensor,
+        update_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        cos = F.cosine_similarity(identity_state, obs_feat, dim=-1, eps=1e-8).unsqueeze(-1)
+        x = torch.cat(
+            [
+                identity_state,
+                obs_feat,
+                torch.abs(identity_state - obs_feat),
+                identity_state * obs_feat,
+                cos,
+            ],
+            dim=-1,
+        )
+        delta = self.update_net(x)
+        gate = torch.sigmoid(self.update_gate(x))
+        updated = F.normalize(identity_state + gate * delta, dim=-1)
+        if update_mask is None:
+            return updated
+        mask = update_mask.to(device=identity_state.device, dtype=torch.bool).unsqueeze(-1)
+        return torch.where(mask, updated, identity_state)
+
+    def build_from_history(
+        self,
+        history_z: torch.Tensor,
+        history_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        batch_size, history_len, _ = history_z.shape
+        if history_mask is None:
+            identity = self.init_identity(history_z[:, 0])
+            start = 1
+            for idx in range(start, history_len):
+                identity = self.update_identity(identity, history_z[:, idx])
+            return identity
+
+        valid = history_mask.to(device=history_z.device, dtype=torch.bool)
+        first_idx = valid.float().argmax(dim=1)
+        batch = torch.arange(batch_size, device=history_z.device)
+        identity = self.init_identity(history_z[batch, first_idx])
+        for idx in range(history_len):
+            is_valid = valid[:, idx] & (idx != first_idx)
+            identity = self.update_identity(identity, history_z[:, idx], is_valid)
+        return identity
 
 
 class HMINet(nn.Module):
@@ -169,10 +258,11 @@ class DiffusionPredictor(nn.Module):
         self.hidden_dim = int(denoiser_hidden_dim)
         self.num_steps = max(int(num_diffusion_steps), 1)
         self.min_train_t = float(min_train_t)
-        self.context_encoder = HistoryTokenEmbedding(
+        self.context_encoder = ConditionTokenEmbedding(
             latent_dim=self.latent_dim,
             context_dim=self.context_dim,
         )
+        self.identity_memory = IdentityMemory(latent_dim=self.latent_dim)
         self.net = HMINet(
             point_dim=self.latent_dim,
             context_dim=self.context_dim,
@@ -185,8 +275,10 @@ class DiffusionPredictor(nn.Module):
         self,
         history_z: torch.Tensor,
         history_mask: torch.Tensor | None = None,
+        identity_state: torch.Tensor | None = None,
+        identity_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.context_encoder(history_z, history_mask)
+        return self.context_encoder(history_z, history_mask, identity_state, identity_mask)
 
     def _last_feature(
         self,
@@ -207,8 +299,11 @@ class DiffusionPredictor(nn.Module):
         history_z: torch.Tensor,
         target_z: torch.Tensor,
         history_mask: torch.Tensor | None = None,
+        identity_state: torch.Tensor | None = None,
     ):
-        context_tokens, context_mask = self.encode_condition(history_z, history_mask)
+        if identity_state is None:
+            identity_state = self.identity_memory.build_from_history(history_z, history_mask)
+        context_tokens, context_mask = self.encode_condition(history_z, history_mask, identity_state)
         last = self._last_feature(history_z, history_mask)
         delta_target = target_z - last.detach()
         batch_size = target_z.shape[0]
@@ -236,6 +331,7 @@ class DiffusionPredictor(nn.Module):
             "cond": step_context,
             "context_tokens": context_tokens,
             "context_mask": context_mask,
+            "identity_state": identity_state,
             "c_target": c_target,
             "c_hat": c_hat,
             "noise": noise,
@@ -248,11 +344,14 @@ class DiffusionPredictor(nn.Module):
         self,
         history_z: torch.Tensor,
         history_mask: torch.Tensor | None = None,
+        identity_state: torch.Tensor | None = None,
         noise: torch.Tensor | None = None,
         sample_steps: int | None = None,
         deterministic: bool = False,
     ) -> torch.Tensor:
-        context_tokens, context_mask = self.encode_condition(history_z, history_mask)
+        if identity_state is None:
+            identity_state = self.identity_memory.build_from_history(history_z, history_mask)
+        context_tokens, context_mask = self.encode_condition(history_z, history_mask, identity_state)
         last = self._last_feature(history_z, history_mask)
         if noise is None:
             noise = torch.randn(
@@ -272,9 +371,12 @@ class DiffusionPredictor(nn.Module):
         self,
         history_z: torch.Tensor,
         history_mask: torch.Tensor | None = None,
+        identity_state: torch.Tensor | None = None,
         sample_steps: int | None = None,
     ) -> torch.Tensor:
-        context_tokens, context_mask = self.encode_condition(history_z, history_mask)
+        if identity_state is None:
+            identity_state = self.identity_memory.build_from_history(history_z, history_mask)
+        context_tokens, context_mask = self.encode_condition(history_z, history_mask, identity_state)
         last = self._last_feature(history_z, history_mask)
         noise = torch.zeros(
             history_z.shape[0], self.latent_dim,

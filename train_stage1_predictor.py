@@ -110,11 +110,13 @@ def run_epoch(model, loader, optimizer, device, config, train: bool, show_progre
     for batch in pbar:
         history = batch["history_feats"].to(device, non_blocking=True)
         history_mask = batch["history_mask"].to(device, non_blocking=True)
+        identity = batch["identity_feats"].to(device, non_blocking=True)
+        identity_mask = batch["identity_mask"].to(device, non_blocking=True)
         target = batch["target_feat"].to(device, non_blocking=True)
         other = batch["other_feat"].to(device, non_blocking=True)
 
         with torch.set_grad_enabled(train):
-            outputs = model.predictor_training_forward(history, history_mask, target)
+            outputs = model.predictor_training_forward(history, history_mask, target, identity, identity_mask)
             other_z = model.project(other)
             pred_feat = outputs["pred_feat_det"]
             target_z = outputs["target_z"]

@@ -6,10 +6,16 @@ Main experiment path:
 
 ```text
 normalized raw FastReID history features [B, K, 2048]
+learned per-track identity state [B, 2048]
 -> DiffusionPredictor
 -> raw delta_feat [B, 2048]
 -> pred_feat = normalize(last_feat + delta_feat)
 ```
+
+The identity state is a learned online vector initialized from the first
+matched observation and updated from matched observations only. It enters DDM
+as one typed context token; it is not used directly as an association cost and
+is not mixed with `pred_feat`.
 
 The active Stage 1 target is to beat last-feature and EMA baselines at feature level:
 

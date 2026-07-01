@@ -14,16 +14,6 @@ matched raw ReID history [K, 2048]
 The Stage 2 update/gate path is removed from the main codebase so metric
 changes can be attributed to the predictor itself.
 
-## Current Preference
-
-We have two planned directions:
-
-1. Add a true long-term identity memory token back into the predictor.
-2. Remove the two-stage update/gate path and validate a predictor-only tracker.
-
-Do the second one first. It is simpler, easier to debug, and closer to the
-current raw 2048-d direct-delta baseline.
-
 ## Main Design
 
 Use APUDiff only for prediction and association. Learned Stage 2 updates are
@@ -33,7 +23,8 @@ At frame `t`:
 
 ```text
 track history before frame t
--> pred_feat_t = APUDiff.predict(history)
+track identity state before frame t
+-> pred_feat_t = APUDiff.predict(history, identity_state)
 -> app_cost(track, det) = 1 - cos(pred_feat_t, det_feat_t)
 ```
 
@@ -42,8 +33,9 @@ After association:
 ```text
 if matched:
     append normalized matched detection feature det_z to the track history
+    update learned identity state from det_z
 else:
-    do not update appearance history
+    do not update appearance history or identity state
 ```
 
 This keeps the tracker anchored to real observations after confirmed matches,
@@ -71,9 +63,11 @@ Keep Stage1 as the main training path:
 
 ```text
 history real normalized ReID features [B, K, 2048]
+identity warmup observations [B, M, 2048]
 target real normalized ReID feature [B, 2048]
+identity_state = learned online updates over identity warmup observations
 delta_target = target - last
-pred_feat = normalize(last + delta_hat)
+pred_feat = normalize(last + delta_hat), conditioned on identity_state
 ```
 
 Losses remain predictor-focused:
@@ -126,12 +120,7 @@ APUDiff-specific feature source/update behavior should change.
 3. Update TrackTrack APUDiff integration to use predictor-only observed-history
    updates.
 4. Compile-check APUDiff and TrackTrack touched files.
-5. Run a small TrackTrack MOT20-05 test with:
-
-```text
---apu-cost-mode pred
---apu-history-update-mode observed
-```
+5. Run a small TrackTrack MOT20-05 test with `--apu-history-update-mode observed`.
 
 6. Only after observed-history predictor-only is understood, run:
 
@@ -167,19 +156,18 @@ rank_acc_last
 7. TrackTrack evaluation can be run with deterministic one-step APUDiff
    prediction.
 
-## Later Identity Memory Plan
+## Identity Memory Design
 
-After the predictor-only tracker path is validated, add true long-term identity
-memory as a predictor condition:
+The predictor uses true long-term identity memory as a predictor condition:
 
 ```text
 recent local history tokens [B, K, 2048]
-+ identity memory token(s) encoded from the full matched prefix
++ one learned identity state token [B, 1, 2048]
 -> DDM context
 -> delta prediction
 ```
 
-The identity token must not be `last_feat`. It should be encoded from the
-matched track prefix from track start to the current prediction time, excluding
-the target/current detection. It should condition prediction only and must not
-be mixed into the output feature to prove gains.
+The identity state is not `last_feat` and not a bag of stored frame tokens. It
+is initialized from the first matched observation and updated by a learned
+online update rule using matched observations before the prediction target. It
+conditions prediction only and is not mixed into the output feature.

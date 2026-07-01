@@ -21,6 +21,7 @@ class FeatureTrackletDataset(Dataset):
         include_other: bool = False,
         target_min_gap: int = 1,
         target_max_gap: int = 10,
+        identity_history_len: int = 32,
     ):
         self.feature_paths = [str(p) for p in feature_paths]
         self.history_len = int(history_len)
@@ -28,10 +29,13 @@ class FeatureTrackletDataset(Dataset):
         self.include_other = include_other
         self.target_min_gap = int(target_min_gap)
         self.target_max_gap = int(target_max_gap)
+        self.identity_history_len = int(identity_history_len)
         if self.target_min_gap < 1:
             raise ValueError("target_min_gap must be >= 1")
         if self.target_max_gap < self.target_min_gap:
             raise ValueError("target_max_gap must be >= target_min_gap")
+        if self.identity_history_len < 1:
+            raise ValueError("identity_history_len must be >= 1")
 
         records = []
         for path in self.feature_paths:
@@ -90,18 +94,25 @@ class FeatureTrackletDataset(Dataset):
         history_start_index = history_end_index - effective_len + 1
         real_history = rows[history_start_index : history_end_index + 1]
         padded_history, history_mask = self._left_pad_history(real_history)
+        identity_history = self._sample_identity_history(rows[: history_end_index + 1])
+        padded_identity, identity_mask = self._right_pad_identity_history(identity_history)
         last_history_record = real_history[-1]
 
         history = np.stack([r["feat"] for r in padded_history], axis=0)
+        identity = np.stack([r["feat"] for r in padded_identity], axis=0)
         history_t = torch.from_numpy(history).float()
+        identity_t = torch.from_numpy(identity).float()
         target_t = torch.from_numpy(target_record["feat"]).float()
         if self.normalize_input:
             history_t = F.normalize(history_t, p=2, dim=-1)
+            identity_t = F.normalize(identity_t, p=2, dim=-1)
             target_t = F.normalize(target_t, p=2, dim=-1)
 
         item = {
             "history_feats": history_t,
             "history_mask": torch.from_numpy(history_mask).float(),
+            "identity_feats": identity_t,
+            "identity_mask": torch.from_numpy(identity_mask).float(),
             "target_feat": target_t,
             "seq": seq,
             "frame_id": target_record["frame_id"],
@@ -125,6 +136,21 @@ class FeatureTrackletDataset(Dataset):
         padded = [real_history[0]] * pad_count + real_history
         mask = np.zeros((self.history_len,), dtype=np.float32)
         mask[pad_count:] = 1.0
+        return padded, mask
+
+    def _sample_identity_history(self, prefix: List[dict]) -> List[dict]:
+        if len(prefix) <= self.identity_history_len:
+            return prefix
+        indices = np.linspace(0, len(prefix) - 1, self.identity_history_len, dtype=np.int64)
+        return [prefix[int(idx)] for idx in indices]
+
+    def _right_pad_identity_history(self, identity_history: List[dict]) -> tuple[List[dict], np.ndarray]:
+        pad_count = self.identity_history_len - len(identity_history)
+        if pad_count < 0:
+            raise ValueError("identity_history longer than identity_history_len")
+        padded = identity_history + [identity_history[-1]] * pad_count
+        mask = np.zeros((self.identity_history_len,), dtype=np.float32)
+        mask[: len(identity_history)] = 1.0
         return padded, mask
 
     def _sample_other_record(self, target_record: dict, rng=random) -> dict:
@@ -180,6 +206,7 @@ def create_feature_dataloaders(config, include_other: bool = False):
         include_other=include_other,
         target_min_gap=config.target_min_gap,
         target_max_gap=config.target_max_gap,
+        identity_history_len=config.identity_history_len,
     )
     if config.reid_dim == "auto":
         config.reid_dim = dataset.reid_dim
@@ -196,6 +223,7 @@ def create_feature_dataloaders(config, include_other: bool = False):
             include_other=include_other,
             target_min_gap=config.target_min_gap,
             target_max_gap=config.target_max_gap,
+            identity_history_len=config.identity_history_len,
         )
         val_indices = list(range(len(val_dataset)))
     elif config.split_mode == "sequence":
