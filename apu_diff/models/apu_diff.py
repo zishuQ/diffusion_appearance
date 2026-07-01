@@ -11,10 +11,10 @@ class APUDiff(nn.Module):
     def __init__(
         self,
         reid_dim: int = 2048,
-        latent_dim: int = 256,
+        latent_dim: int = 2048,
         projection_hidden_dim: int = 512,
         time_dim: int = 64,
-        num_diffusion_steps: int = 8,
+        num_diffusion_steps: int = 1,
         denoiser_hidden_dim: int = 512,
         update_hidden_dim: int = 512,
     ):
@@ -26,6 +26,8 @@ class APUDiff(nn.Module):
             latent_dim=self.latent_dim,
             hidden_dim=projection_hidden_dim,
         )
+        for param in self.projection.parameters():
+            param.requires_grad = False
         self.predictor = DiffusionPredictor(
             latent_dim=self.latent_dim,
             time_dim=time_dim,
@@ -39,7 +41,7 @@ class APUDiff(nn.Module):
         squeeze = feat_reid.dim() == 1
         if squeeze:
             feat_reid = feat_reid.unsqueeze(0)
-        z = self.projection(feat_reid)
+        z = F.normalize(feat_reid, dim=-1)
         return z.squeeze(0) if squeeze else z
 
     def init_identity(self, local_queue: torch.Tensor, history_mask: torch.Tensor) -> torch.Tensor:
@@ -54,12 +56,12 @@ class APUDiff(nn.Module):
         identity = local_queue[batch, idx]
         return identity.squeeze(0) if squeeze else identity
 
+    @torch.no_grad()
     def predict(
         self,
         local_queue: torch.Tensor,
         history_mask: torch.Tensor,
-        identity_token: torch.Tensor,
-        target_z: torch.Tensor | None = None,
+        identity_token: torch.Tensor | None = None,
         deterministic: bool = True,
         sample_steps: int | None = None,
     ):
@@ -67,18 +69,19 @@ class APUDiff(nn.Module):
         if squeeze:
             local_queue = local_queue.unsqueeze(0)
             history_mask = history_mask.unsqueeze(0)
-            identity_token = identity_token.unsqueeze(0)
-            if target_z is not None:
-                target_z = target_z.unsqueeze(0)
-        if target_z is not None:
-            out = self.predictor.training_forward(local_queue, identity_token, target_z, history_mask)
-            if squeeze:
-                out = {k: v.squeeze(0) if torch.is_tensor(v) and v.shape[:1] == (1,) else v for k, v in out.items()}
-            return out
         pred = (
-            self.predictor.deterministic_predict(local_queue, identity_token, history_mask)
+            self.predictor.deterministic_predict(
+                local_queue,
+                history_mask,
+                sample_steps=sample_steps,
+            )
             if deterministic
-            else self.predictor.sample(local_queue, identity_token, history_mask, sample_steps=sample_steps)
+            else self.predictor.sample(
+                local_queue,
+                history_mask,
+                sample_steps=sample_steps if sample_steps is not None else 1,
+                deterministic=False,
+            )
         )
         return pred.squeeze(0) if squeeze else pred
 
@@ -103,24 +106,19 @@ class APUDiff(nn.Module):
         pred_feat: torch.Tensor,
         det_z: torch.Tensor,
         identity_token: torch.Tensor,
-        mode: str = "gate",
+        mode: str = "pred",
     ):
-        if mode == "gate":
-            gated_feat, attn = self.cross_attn_gate(pred_feat, det_z, identity_token)
-            cost = 1.0 - F.cosine_similarity(gated_feat, det_z, dim=-1)
-            gate = attn.mean(dim=-1)
-            return cost, gate
         c_pred = 1.0 - F.cosine_similarity(pred_feat, det_z, dim=-1)
         c_mem = 1.0 - F.cosine_similarity(identity_token, det_z, dim=-1)
         if mode == "pred":
-            return c_pred, torch.zeros_like(c_pred)
-        elif mode == "identity":
-            return c_mem, torch.ones_like(c_mem)
-        elif mode == "min":
-            cost = torch.minimum(c_mem, c_pred)
-            return cost, torch.zeros_like(cost)
-        else:
-            raise ValueError(f"Unknown APUDiff appearance cost mode: {mode!r}")
+            return c_pred
+        if mode == "identity":
+            return c_mem
+        if mode == "avg":
+            return 0.5 * c_pred + 0.5 * c_mem
+        if mode == "min":
+            return torch.minimum(c_mem, c_pred)
+        raise ValueError(f"Unknown APUDiff appearance cost mode: {mode!r}")
 
     def forward(self, local_queue: torch.Tensor, history_mask: torch.Tensor, identity_token: torch.Tensor, obs_feat: torch.Tensor):
         pred_feat = self.predict(local_queue, history_mask, identity_token, deterministic=True)
@@ -135,11 +133,9 @@ class APUDiff(nn.Module):
     ):
         local_queue = self.project(history_feats)
         target_z = self.project(target_feat)
-        identity_token = self.init_identity(local_queue, history_mask)
-        outputs = self.predict(local_queue, history_mask, identity_token, target_z=target_z)
+        outputs = self.predictor.training_forward(local_queue, target_z, history_mask)
         outputs["target_z"] = target_z
         outputs["local_queue"] = local_queue
-        outputs["identity_token"] = identity_token
         outputs["pred_feat_det"] = outputs["pred_feat"]
         return outputs
 

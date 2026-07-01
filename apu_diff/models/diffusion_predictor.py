@@ -1,10 +1,8 @@
-import math
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from apu_diff.utils.diffusion import l2_normalize, timestep_embedding
+from apu_diff.utils.diffusion import timestep_embedding
 
 
 class MFL(nn.Module):
@@ -23,9 +21,9 @@ class MFL(nn.Module):
 
 
 class HistoryTokenEmbedding(nn.Module):
-    """Project history tokens to context space with type and position embeddings.
+    """Project history tokens to context space with position embeddings.
 
-    Outputs context_tokens [B, K+1, D] and context_mask [B, K+1] for
+    Outputs context_tokens [B, K, D] and context_mask [B, K] for
     cross-attention inside the denoising network.  No TransformerEncoder
     pooling is applied here -- the denoiser attends to raw tokens.
     """
@@ -33,39 +31,27 @@ class HistoryTokenEmbedding(nn.Module):
     def __init__(self, latent_dim: int, context_dim: int):
         super().__init__()
         self.history_proj = nn.Linear(latent_dim, context_dim)
-        self.identity_proj = nn.Linear(latent_dim, context_dim)
         self.history_type = nn.Parameter(torch.zeros(1, 1, context_dim))
-        self.identity_type = nn.Parameter(torch.zeros(1, 1, context_dim))
         nn.init.trunc_normal_(self.history_type, std=0.02)
-        nn.init.trunc_normal_(self.identity_type, std=0.02)
 
     def forward(
         self,
         history_z: torch.Tensor,
-        identity_token: torch.Tensor,
         history_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size, history_len, _ = history_z.shape
         hist = self.history_proj(history_z) + self.history_type
-        ident = self.identity_proj(identity_token).unsqueeze(1) + self.identity_type
-        tokens = torch.cat([hist, ident], dim=1)
 
         pos = timestep_embedding(
-            torch.arange(history_len + 1, device=history_z.device, dtype=torch.float32),
-            tokens.shape[-1],
-        ).to(dtype=tokens.dtype)
-        tokens = tokens + pos.unsqueeze(0)
+            torch.arange(history_len, device=history_z.device, dtype=torch.float32),
+            hist.shape[-1],
+        ).to(dtype=hist.dtype)
+        tokens = hist + pos.unsqueeze(0)
 
         if history_mask is not None:
-            ctx_mask = torch.cat(
-                [
-                    history_mask.to(device=history_z.device, dtype=tokens.dtype),
-                    torch.ones(batch_size, 1, device=history_z.device, dtype=tokens.dtype),
-                ],
-                dim=1,
-            )
+            ctx_mask = history_mask.to(device=history_z.device, dtype=tokens.dtype)
         else:
-            ctx_mask = torch.ones(batch_size, history_len + 1, device=history_z.device, dtype=tokens.dtype)
+            ctx_mask = torch.ones(batch_size, history_len, device=history_z.device, dtype=tokens.dtype)
         return tokens, ctx_mask
 
 
@@ -74,7 +60,7 @@ class HMINet(nn.Module):
 
     At each denoising step the current residual / noise state together with
     the beta time embedding forms a query that cross-attends to the
-    context_tokens (history observations + identity).  The resulting
+    context_tokens (history observations only in the current main path).  The resulting
     step_context vector then drives the MFL-modulated layers.
     """
 
@@ -167,7 +153,7 @@ class HMINet(nn.Module):
 class DiffusionPredictor(nn.Module):
     def __init__(
         self,
-        latent_dim: int = 512,
+        latent_dim: int = 2048,
         time_dim: int = 64,
         num_diffusion_steps: int = 1,
         denoiser_hidden_dim: int = 1024,
@@ -192,39 +178,15 @@ class DiffusionPredictor(nn.Module):
             context_dim=self.context_dim,
             hidden_dim=self.hidden_dim,
             tf_layer=2,
-            num_heads=4,
+            num_heads=max(int(num_attention_heads), 1),
         )
-        self.base_logit = nn.Parameter(torch.tensor(-4.5951199))
-        self.history_mix_logit = nn.Parameter(torch.tensor(-2.1972246))
-        self.residual_logit = nn.Parameter(torch.tensor(-2.1972246))
-        self.base_head = nn.Sequential(
-            nn.Linear(self.context_dim, self.hidden_dim),
-            nn.GELU(),
-            nn.Linear(self.hidden_dim, self.latent_dim),
-        )
-        self.base_score = nn.Sequential(
-            nn.Linear(self.latent_dim + self.context_dim, max(self.hidden_dim // 2, 128)),
-            nn.GELU(),
-            nn.Linear(max(self.hidden_dim // 2, 128), 1),
-        )
-        nn.init.zeros_(self.base_score[-1].weight)
-        nn.init.zeros_(self.base_score[-1].bias)
 
     def encode_condition(
         self,
         history_z: torch.Tensor,
-        identity_token: torch.Tensor,
         history_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.context_encoder(history_z, identity_token, history_mask)
-
-    def _compute_pooled_cond(
-        self,
-        context_tokens: torch.Tensor,
-        context_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        mask = context_mask.unsqueeze(-1)
-        return (context_tokens * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
+        return self.context_encoder(history_z, history_mask)
 
     def _last_feature(
         self,
@@ -233,111 +195,47 @@ class DiffusionPredictor(nn.Module):
     ) -> torch.Tensor:
         if history_mask is None:
             return history_z[:, -1]
-        mask = history_mask.to(device=history_z.device, dtype=torch.long)
-        idx = mask.sum(dim=1).clamp_min(1) - 1
-        idx = idx + history_z.shape[1] - mask.sum(dim=1).clamp_min(1)
+        valid = history_mask.to(device=history_z.device, dtype=torch.bool)
+        positions = torch.arange(history_z.shape[1], device=history_z.device)
+        idx = positions.unsqueeze(0).expand_as(valid).masked_fill(~valid, -1).max(dim=1).values
+        idx = idx.clamp_min(0)
         batch = torch.arange(history_z.shape[0], device=history_z.device)
         return history_z[batch, idx]
-
-    def _history_pool(
-        self,
-        history_z: torch.Tensor,
-        cond: torch.Tensor,
-        history_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        cond_tokens = cond.unsqueeze(1).expand(-1, history_z.shape[1], -1)
-        score_input = torch.cat([history_z, cond_tokens], dim=-1)
-        scores = self.base_score(score_input).squeeze(-1)
-        recency_bias = torch.linspace(
-            -1.0, 0.0, history_z.shape[1], device=history_z.device, dtype=scores.dtype,
-        )
-        scores = scores + recency_bias.unsqueeze(0)
-        if history_mask is not None:
-            valid = history_mask.to(device=history_z.device, dtype=torch.bool)
-            scores = scores.masked_fill(~valid, torch.finfo(scores.dtype).min)
-        weights = torch.softmax(scores, dim=1)
-        return (history_z * weights.unsqueeze(-1)).sum(dim=1)
-
-    def history_mix_scale(self) -> torch.Tensor:
-        return torch.sigmoid(self.history_mix_logit)
-
-    def base_scale(self) -> torch.Tensor:
-        return torch.sigmoid(self.base_logit)
-
-    def residual_scale(self) -> torch.Tensor:
-        return torch.sigmoid(self.residual_logit)
-
-    def make_base(
-        self,
-        history_z: torch.Tensor,
-        cond: torch.Tensor,
-        history_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        last = self._last_feature(history_z, history_mask)
-        history_pool = self._history_pool(history_z, cond, history_mask)
-        history_delta = history_pool - last
-        base_delta = torch.tanh(self.base_head(cond))
-        return l2_normalize(
-            last + self.history_mix_scale() * history_delta + self.base_scale() * base_delta,
-            dim=-1,
-        )
-
-    def apply_residual(self, base: torch.Tensor, residual: torch.Tensor) -> torch.Tensor:
-        return l2_normalize(base + self.residual_scale() * residual, dim=-1)
-
-    def coarse_predict(
-        self,
-        history_z: torch.Tensor,
-        identity_token: torch.Tensor,
-        history_mask: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Returns (base, context_tokens, context_mask, pooled_cond)."""
-        context_tokens, context_mask = self.encode_condition(history_z, identity_token, history_mask)
-        pooled_cond = self._compute_pooled_cond(context_tokens, context_mask)
-        base = self.make_base(history_z, pooled_cond, history_mask)
-        return base, context_tokens, context_mask, pooled_cond
 
     def training_forward(
         self,
         history_z: torch.Tensor,
-        identity_token: torch.Tensor,
         target_z: torch.Tensor,
         history_mask: torch.Tensor | None = None,
     ):
-        base, context_tokens, context_mask, pooled_cond = self.coarse_predict(
-            history_z, identity_token, history_mask,
-        )
+        context_tokens, context_mask = self.encode_condition(history_z, history_mask)
+        last = self._last_feature(history_z, history_mask)
+        delta_target = target_z - last.detach()
         batch_size = target_z.shape[0]
         t = torch.rand(batch_size, device=target_z.device, dtype=target_z.dtype)
         t = t.mul(1.0 - self.min_train_t).add(self.min_train_t)
-        noise = torch.randn_like(target_z)
-        residual_target = target_z - base.detach()
-        c_target = -residual_target
-        diffusion_state = self.ddm_forward(residual_target, noise, t, c_target)
+        noise = torch.randn_like(delta_target)
+        c_target = -delta_target
+        diffusion_state = self.ddm_forward(delta_target, noise, t, c_target)
         beta = self.to_beta(t)
         c_hat, step_context = self.net(diffusion_state, beta=beta, context_tokens=context_tokens, context_mask=context_mask)
         noise_hat = self.predict_noise(diffusion_state, c_hat, t)
-        pred_residual = self.sample_residual_from_condition(
-            context_tokens, context_mask, noise=torch.zeros_like(target_z), sample_steps=1,
+        pred_delta = self.sample_delta_from_condition(
+            context_tokens,
+            context_mask,
+            noise=torch.zeros_like(delta_target),
+            sample_steps=1,
+            deterministic=True,
         )
-        pred_sample_residual = self.sample_residual_from_condition(
-            context_tokens, context_mask, noise=torch.randn_like(target_z), sample_steps=1,
-        )
-        pred_feat = self.apply_residual(base, pred_residual)
-        pred_feat_sample = self.apply_residual(base, pred_sample_residual)
+        pred_feat = F.normalize(last + pred_delta, dim=-1)
         return {
             "pred_feat": pred_feat,
-            "pred_feat_sample": pred_feat_sample,
-            "mu": base,
+            "last_feat": last,
+            "pred_delta": pred_delta,
+            "delta_target": delta_target,
             "cond": step_context,
             "context_tokens": context_tokens,
             "context_mask": context_mask,
-            "pooled_cond": pooled_cond,
-            "base": base,
-            "base_scale": self.base_scale(),
-            "history_mix_scale": self.history_mix_scale(),
-            "residual_scale": self.residual_scale(),
-            "residual_target": residual_target,
             "c_target": c_target,
             "c_hat": c_hat,
             "noise": noise,
@@ -349,48 +247,55 @@ class DiffusionPredictor(nn.Module):
     def sample(
         self,
         history_z: torch.Tensor,
-        identity_token: torch.Tensor,
         history_mask: torch.Tensor | None = None,
         noise: torch.Tensor | None = None,
         sample_steps: int | None = None,
+        deterministic: bool = False,
     ) -> torch.Tensor:
-        base, context_tokens, context_mask, _pooled = self.coarse_predict(
-            history_z, identity_token, history_mask,
-        )
+        context_tokens, context_mask = self.encode_condition(history_z, history_mask)
+        last = self._last_feature(history_z, history_mask)
         if noise is None:
             noise = torch.randn(
-                identity_token.shape[0], self.latent_dim,
-                device=identity_token.device, dtype=identity_token.dtype,
+                history_z.shape[0], self.latent_dim,
+                device=history_z.device, dtype=history_z.dtype,
             )
-        residual = self.sample_residual_from_condition(
-            context_tokens, context_mask, noise=noise, sample_steps=sample_steps,
+        delta = self.sample_delta_from_condition(
+            context_tokens,
+            context_mask,
+            noise=noise,
+            sample_steps=sample_steps,
+            deterministic=deterministic,
         )
-        return self.apply_residual(base, residual)
+        return F.normalize(last + delta, dim=-1)
 
     def deterministic_predict(
         self,
         history_z: torch.Tensor,
-        identity_token: torch.Tensor,
         history_mask: torch.Tensor | None = None,
+        sample_steps: int | None = None,
     ) -> torch.Tensor:
-        base, context_tokens, context_mask, _pooled = self.coarse_predict(
-            history_z, identity_token, history_mask,
-        )
+        context_tokens, context_mask = self.encode_condition(history_z, history_mask)
+        last = self._last_feature(history_z, history_mask)
         noise = torch.zeros(
-            identity_token.shape[0], self.latent_dim,
-            device=identity_token.device, dtype=identity_token.dtype,
+            history_z.shape[0], self.latent_dim,
+            device=history_z.device, dtype=history_z.dtype,
         )
-        residual = self.sample_residual_from_condition(
-            context_tokens, context_mask, noise=noise, sample_steps=1,
+        delta = self.sample_delta_from_condition(
+            context_tokens,
+            context_mask,
+            noise=noise,
+            sample_steps=sample_steps if sample_steps is not None else 1,
+            deterministic=True,
         )
-        return self.apply_residual(base, residual)
+        return F.normalize(last + delta, dim=-1)
 
-    def sample_residual_from_condition(
+    def sample_delta_from_condition(
         self,
         context_tokens: torch.Tensor,
         context_mask: torch.Tensor,
         noise: torch.Tensor,
         sample_steps: int | None = None,
+        deterministic: bool = True,
     ) -> torch.Tensor:
         steps = max(int(sample_steps if sample_steps is not None else self.num_steps), 1)
         x_t = noise
@@ -405,9 +310,9 @@ class DiffusionPredictor(nn.Module):
             noise_hat = self.predict_noise(x_t, c_hat, cur_time)
             x0 = self.pred_x0_from_xt(x_t, noise_hat, c_hat, cur_time).clamp(-1.0, 1.0)
             c_hat = -x0
-            x_t = self.pred_xtms_from_xt(x_t, noise_hat, c_hat, cur_time, s)
+            x_t = self.pred_xtms_from_xt(x_t, noise_hat, c_hat, cur_time, s, deterministic=deterministic)
             cur_time = cur_time - s
-        return l2_normalize(x_t, dim=-1)
+        return x_t.clamp(-1.0, 1.0)
 
     def to_beta(self, t: torch.Tensor) -> torch.Tensor:
         return t.clamp_min(self.min_train_t).log() / 4.0
@@ -437,9 +342,12 @@ class DiffusionPredictor(nn.Module):
         c_hat: torch.Tensor,
         t: torch.Tensor,
         s: torch.Tensor,
+        deterministic: bool = False,
     ) -> torch.Tensor:
         time = t.clamp_min(self.min_train_t).unsqueeze(-1)
         s = s.unsqueeze(-1)
         mean = x_t + c_hat * (time - s) - c_hat * time - s / time.sqrt() * noise_hat
+        if deterministic:
+            return mean
         sigma = torch.sqrt((s * (time - s) / time).clamp_min(0.0))
         return mean + sigma * torch.randn_like(mean)

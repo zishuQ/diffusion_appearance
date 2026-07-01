@@ -86,7 +86,7 @@ class FeatureTrackletDataset(Dataset):
         target_gap = rng.randint(min_gap, max_gap)
         history_end_index = target_index - target_gap
         max_history = min(self.history_len, history_end_index + 1)
-        effective_len = rng.randint(1, max_history)
+        effective_len = max_history
         history_start_index = history_end_index - effective_len + 1
         real_history = rows[history_start_index : history_end_index + 1]
         padded_history, history_mask = self._left_pad_history(real_history)

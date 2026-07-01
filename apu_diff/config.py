@@ -8,12 +8,12 @@ import yaml
 @dataclass
 class APUDiffConfig:
     reid_dim: Union[int, str] = 2048
-    latent_dim: int = 256
+    latent_dim: int = 2048
     history_len: int = 5
     projection_hidden_dim: int = 512
     denoiser_hidden_dim: int = 512
     update_hidden_dim: int = 512
-    batch_size: int = 256
+    batch_size: int = 64
     num_workers: int = 0
     num_epochs_stage1: int = 30
     num_epochs_stage2: int = 20
@@ -26,12 +26,13 @@ class APUDiffConfig:
     stage1_improve_weight: float = 2.0
     stage1_improve_margin: float = 0.0
     stage1_margin: float = 0.2
-    stage1_projection_warmup_epochs: int = 5
+    stage1_projection_warmup_epochs: int = 0
     stage1_supcon_weight: float = 1.0
     stage1_distill_weight: float = 1.0
     stage1_supcon_temperature: float = 0.1
-    freeze_projection_after_warmup: bool = True
-    num_diffusion_steps: int = 8
+    freeze_projection_after_warmup: bool = False
+    ema_alpha: float = 0.9
+    num_diffusion_steps: int = 1
     time_dim: int = 64
     lambda_clean_prob: float = 0.5
     lambda_dirty_min: float = 0.3
@@ -128,6 +129,7 @@ def _flatten_config(data: Dict[str, Any]) -> Dict[str, Any]:
         "stage1_distill_weight": training.get("stage1_distill_weight"),
         "stage1_supcon_temperature": training.get("stage1_supcon_temperature"),
         "freeze_projection_after_warmup": training.get("freeze_projection_after_warmup"),
+        "ema_alpha": training.get("ema_alpha"),
         "gate_loss_weight": training.get("gate_loss_weight"),
         "match_temperature": training.get("match_temperature"),
         "match_margin": training.get("match_margin"),

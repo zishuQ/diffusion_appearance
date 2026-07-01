@@ -1,7 +1,7 @@
 # APUDiff SportsMOT Full Training
 
 reid_dim: 2048
-latent_dim: 512
+latent_dim: 2048
 history_len: 5
 
 projection:
@@ -29,11 +29,12 @@ training:
   stage1_improve_weight: 10.0
   stage1_improve_margin: 0.0
   stage1_margin: 0.2
-  stage1_projection_warmup_epochs: 3
+  stage1_projection_warmup_epochs: 0
   stage1_supcon_weight: 1.0
   stage1_distill_weight: 1.0
   stage1_supcon_temperature: 0.1
-  freeze_projection_after_warmup: true
+  freeze_projection_after_warmup: false
+  ema_alpha: 0.9
   match_temperature: 0.1
   match_margin: 0.05
 

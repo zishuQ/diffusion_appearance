@@ -1,5 +1,5 @@
 reid_dim: 2048
-latent_dim: 512
+latent_dim: 2048
 history_len: 5
 
 projection:
@@ -15,7 +15,7 @@ update_block:
   use_gru_cell_for_identity: true
 
 training:
-  batch_size: 128
+  batch_size: 64
   stage1_epochs: 30
   stage2_epochs: 20
   lr_stage1: 0.0001
@@ -27,11 +27,12 @@ training:
   stage1_improve_weight: 2.0
   stage1_improve_margin: 0.0
   stage1_margin: 0.2
-  stage1_projection_warmup_epochs: 5
+  stage1_projection_warmup_epochs: 0
   stage1_supcon_weight: 1.0
   stage1_distill_weight: 1.0
   stage1_supcon_temperature: 0.1
-  freeze_projection_after_warmup: true
+  freeze_projection_after_warmup: false
+  ema_alpha: 0.9
 
 obs_synthesis:
   clean_prob: 0.5
