@@ -1,7 +1,7 @@
 base: apu_diff_base.yaml
 
 training:
-  batch_size: 32
+  batch_size: 512
 
 val_sequences:
   - MOT20-05
